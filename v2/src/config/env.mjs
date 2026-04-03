@@ -72,6 +72,122 @@ export const ENV_SCHEMA = {
     // Paths
     CLAUDE_CONFIG_DIR: { type: 'string', description: 'Custom config directory' },
     CLAUDE_CACHE_DIR: { type: 'string', description: 'Custom cache directory' },
+
+    // Extended: OAuth & Auth
+    CLAUDE_OAUTH_CLIENT_ID: { type: 'string', description: 'OAuth client ID' },
+    CLAUDE_OAUTH_REDIRECT_URI: { type: 'string', default: 'http://localhost:9876/callback', description: 'OAuth redirect URI' },
+    ANTHROPIC_AUTH_TOKEN: { type: 'string', description: 'Anthropic auth token (OAuth)' },
+
+    // Extended: Sandbox & Security
+    CLAUDE_CODE_SANDBOX_PLATFORM: { type: 'string', description: 'Override sandbox platform (linux/darwin)' },
+    CLAUDE_CODE_INJECTION_CHECK: { type: 'boolean', default: true, description: 'Enable command injection checks' },
+    CLAUDE_CODE_PATH_CHECK: { type: 'boolean', default: true, description: 'Enable file path validation' },
+
+    // Extended: Rate Limiting
+    CLAUDE_CODE_MAX_RETRIES: { type: 'number', default: 5, description: 'Max API retries on 429/529' },
+    CLAUDE_CODE_RETRY_BASE_DELAY: { type: 'number', default: 1000, description: 'Base retry delay in ms' },
+    CLAUDE_CODE_RETRY_MAX_DELAY: { type: 'number', default: 60000, description: 'Max retry delay in ms' },
+
+    // Extended: Agent Teams
+    CLAUDE_CODE_TEAM_SIZE: { type: 'number', default: 5, description: 'Max team size for multi-agent' },
+    CLAUDE_CODE_TEAM_BROADCAST: { type: 'boolean', default: false, description: 'Broadcast messages to all teammates' },
+
+    // Extended: Providers
+    AWS_ACCESS_KEY_ID: { type: 'string', description: 'AWS access key for Bedrock' },
+    AWS_SECRET_ACCESS_KEY: { type: 'string', description: 'AWS secret key for Bedrock' },
+    AWS_REGION: { type: 'string', default: 'us-east-1', description: 'AWS region for Bedrock' },
+    GOOGLE_APPLICATION_CREDENTIALS: { type: 'string', description: 'GCP service account credentials path' },
+    VERTEX_PROJECT: { type: 'string', description: 'GCP project for Vertex AI' },
+    VERTEX_REGION: { type: 'string', default: 'us-central1', description: 'GCP region for Vertex AI' },
+
+    // Extended: Cron & Scheduling
+    CLAUDE_CODE_CRON_INTERVAL: { type: 'number', default: 60000, description: 'Cron check interval in ms' },
+    CLAUDE_CODE_SCHEDULED_TASKS_FILE: { type: 'string', description: 'Path to scheduled tasks JSON' },
+
+    // Extended: Plugins
+    CLAUDE_CODE_PLUGIN_DIR: { type: 'string', description: 'Custom plugin directory' },
+    CLAUDE_CODE_DISABLE_PLUGINS: { type: 'boolean', default: false, description: 'Disable all plugins' },
+
+    // Extended: Session
+    CLAUDE_CODE_SESSION_TTL: { type: 'number', default: 86400000, description: 'Session TTL in ms (default 24h)' },
+    CLAUDE_CODE_AUTO_SAVE: { type: 'boolean', default: true, description: 'Auto-save sessions' },
+
+    // Extended: Logging
+    CLAUDE_CODE_LOG_LEVEL: { type: 'string', default: 'info', description: 'Log level (debug/info/warn/error)' },
+    CLAUDE_CODE_LOG_FILE: { type: 'string', description: 'Log file path' },
+
+    // Extended: Hooks
+    CLAUDE_CODE_HOOK_TIMEOUT: { type: 'number', default: 10000, description: 'Hook execution timeout in ms' },
+    CLAUDE_CODE_HOOK_FAIL_OPEN: { type: 'boolean', default: true, description: 'Allow on hook failure' },
+
+    // Extended: Context
+    CLAUDE_CODE_COMPACT_THRESHOLD: { type: 'number', default: 0.8, description: 'Context compaction threshold (0-1)' },
+    CLAUDE_CODE_MAX_MESSAGES: { type: 'number', default: 200, description: 'Max messages in context' },
+
+    // Extended: Cache
+    CLAUDE_CODE_PROMPT_CACHE: { type: 'boolean', default: true, description: 'Enable prompt caching' },
+    CLAUDE_CODE_CACHE_TTL: { type: 'number', default: 300000, description: 'Cache TTL in ms (default 5min)' },
+
+    // Extended: Output
+    CLAUDE_CODE_MAX_LINES: { type: 'number', default: 200, description: 'Max output lines for tools' },
+    CLAUDE_CODE_TRUNCATE: { type: 'boolean', default: true, description: 'Truncate long outputs' },
+    CLAUDE_CODE_JSON_OUTPUT: { type: 'boolean', default: false, description: 'Output JSON instead of text' },
+
+    // Extended: Git
+    CLAUDE_CODE_GIT_ENABLED: { type: 'boolean', default: true, description: 'Enable git operations' },
+    CLAUDE_CODE_GIT_AUTO_COMMIT: { type: 'boolean', default: false, description: 'Auto-commit changes' },
+
+    // Extended: Editor
+    EDITOR: { type: 'string', description: 'Default text editor' },
+    VISUAL: { type: 'string', description: 'Default visual editor' },
+
+    // Extended: Language
+    LANG: { type: 'string', description: 'System locale' },
+    LC_ALL: { type: 'string', description: 'Locale override' },
+
+    // Extended: CI/CD
+    CI: { type: 'boolean', default: false, description: 'Running in CI environment' },
+    GITHUB_ACTIONS: { type: 'boolean', default: false, description: 'Running in GitHub Actions' },
+    GITLAB_CI: { type: 'boolean', default: false, description: 'Running in GitLab CI' },
+
+    // Extended: Container
+    CONTAINER: { type: 'boolean', default: false, description: 'Running in container' },
+    DOCKER: { type: 'boolean', default: false, description: 'Running in Docker' },
+    CODESPACE_NAME: { type: 'string', description: 'GitHub Codespace name' },
+
+    // Extended: Notification
+    CLAUDE_CODE_NOTIFY: { type: 'boolean', default: false, description: 'Enable desktop notifications' },
+    CLAUDE_CODE_WEBHOOK_URL: { type: 'string', description: 'Webhook URL for notifications' },
+
+    // Extended: Experimental
+    CLAUDE_CODE_EXPERIMENTAL_MCP: { type: 'boolean', default: false, description: 'Enable experimental MCP features' },
+    CLAUDE_CODE_EXPERIMENTAL_TOOLS: { type: 'boolean', default: false, description: 'Enable experimental tools' },
+    CLAUDE_CODE_EXPERIMENTAL_VISION: { type: 'boolean', default: false, description: 'Enable vision/image support' },
+    CLAUDE_CODE_EXPERIMENTAL_MEMORY: { type: 'boolean', default: false, description: 'Enable persistent memory' },
+
+    // Extended: Worktree
+    CLAUDE_CODE_WORKTREE_DIR: { type: 'string', description: 'Default worktree base directory' },
+    CLAUDE_CODE_AUTO_WORKTREE: { type: 'boolean', default: false, description: 'Auto-create worktrees for branches' },
+
+    // Extended: Notebook
+    CLAUDE_CODE_NOTEBOOK_KERNEL: { type: 'string', default: 'python3', description: 'Default Jupyter kernel' },
+
+    // Extended: LSP
+    CLAUDE_CODE_LSP_ENABLED: { type: 'boolean', default: false, description: 'Enable LSP integration' },
+    CLAUDE_CODE_LSP_PORT: { type: 'number', default: 0, description: 'LSP server port (0 = auto)' },
+
+    // Extended: Timeouts
+    CLAUDE_CODE_TOOL_TIMEOUT: { type: 'number', default: 120000, description: 'Tool execution timeout in ms' },
+    CLAUDE_CODE_API_TIMEOUT: { type: 'number', default: 300000, description: 'API call timeout in ms' },
+    CLAUDE_CODE_MCP_TIMEOUT: { type: 'number', default: 30000, description: 'MCP operation timeout in ms' },
+
+    // Extended: Permissions (additional)
+    CLAUDE_CODE_ALLOWED_TOOLS: { type: 'string', description: 'Comma-separated list of allowed tools' },
+    CLAUDE_CODE_DISALLOWED_TOOLS: { type: 'string', description: 'Comma-separated list of disallowed tools' },
+
+    // Extended: Telemetry (additional)
+    CLAUDE_CODE_TELEMETRY_ENDPOINT: { type: 'string', description: 'Custom telemetry endpoint URL' },
+    CLAUDE_CODE_SENTRY_DSN: { type: 'string', description: 'Sentry DSN for error reporting' },
 };
 
 /**
