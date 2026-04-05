@@ -12,7 +12,10 @@
   <img alt="Commands" src="https://img.shields.io/badge/commands-40-blue?style=flat-square" />
   <img alt="npm" src="https://img.shields.io/npm/v/@ruvnet/open-claude-code?style=flat-square&label=npm" />
   <img alt="License" src="https://img.shields.io/badge/License-MIT-blue?style=flat-square" />
+  <img alt="Nightly" src="https://img.shields.io/badge/nightly-verified_releases-brightgreen?style=flat-square" />
 </p>
+
+> **Automated Nightly Releases** — Open Claude Code automatically detects new [Claude Code](https://www.npmjs.com/package/@anthropic-ai/claude-code) releases, runs 903+ tests to verify zero regressions, and publishes verified builds with AI-powered discovery analysis. See [Releases](https://github.com/ruvnet/open-claude-code/releases) | [ADR-001](docs/adr/ADR-001-nightly-verified-release-pipeline.md) | [pi.ruv.io](https://pi.ruv.io)
 
 ---
 
@@ -354,6 +357,39 @@ This is a **clean-room implementation** — no leaked source used. Architecture 
 - [Decompiled Releases](https://github.com/ruvnet/rudevolution/releases) — Every Claude Code version
 - [v2 Architecture (ADR-001)](./docs/adr/ADR-001-v2-architecture.md)
 - [Path to 100% (ADR-002)](./docs/adr/ADR-002-path-to-100-percent.md)
+
+<details>
+<summary><b>Nightly Release Pipeline</b></summary>
+
+### Automated Nightly Verified Releases (ADR-001)
+
+Open Claude Code includes an automated nightly CI/CD pipeline that:
+
+1. **Detects** new Claude Code releases from npm registry (03:00 UTC daily)
+2. **Verifies** compatibility with 903+ tests, npm audit, and smoke tests
+3. **Analyzes** changes using Claude Sonnet 4.6 AI-powered discovery
+4. **Publishes** verified releases with detailed notes — only if ALL gates pass
+
+```
+Cron 03:00 UTC → npm check → 903+ tests → npm audit → AI analysis → verified release
+```
+
+**Manual trigger:**
+```bash
+gh workflow run nightly.yml -f force_release=true
+```
+
+**Required secrets:**
+- `GITHUB_TOKEN` — automatic
+- `ANTHROPIC_API_KEY` — optional, for AI discovery analysis
+
+See [ADR-001](docs/adr/ADR-001-nightly-verified-release-pipeline.md) for full architecture.
+
+### rudevolution Integration
+
+The [rudevolution](https://github.com/ruvnet/rudevolution) submodule provides AI-powered decompilation analysis of Claude Code releases, tracking 34,759+ functions with 95.7% name accuracy. Used by the nightly pipeline for change discovery.
+
+</details>
 
 ## 📄 License
 

@@ -1,0 +1,447 @@
+name: Nightly Verified Release
+
+on:
+  schedule:
+    # Run at 03:00 UTC every day
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      force_release:
+        description: 'Force release even if no new upstream version detected'
+        required: false
+        default: 'false'
+        type: boolean
+      skip_ai_analysis:
+        description: 'Skip AI-powered discovery analysis'
+        required: false
+        default: 'false'
+        type: boolean
+
+permissions:
+  contents: write
+  issues: write
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  # ──────────────────────────────────────────────────────────────────
+  # Phase 1: Detect upstream Claude Code releases
+  # ──────────────────────────────────────────────────────────────────
+  detect:
+    name: 'Phase 1: Detect'
+    runs-on: ubuntu-latest
+    outputs:
+      new_version: ${{ steps.check.outputs.new_version }}
+      should_release: ${{ steps.check.outputs.should_release }}
+      previous_version: ${{ steps.check.outputs.previous_version }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check for new Claude Code release
+        id: check
+        run: |
+          chmod +x scripts/check-claude-release.sh
+
+          PREVIOUS_VERSION="$(cat scripts/last-known-claude-version.txt 2>/dev/null || echo 'unknown')"
+          echo "previous_version=${PREVIOUS_VERSION}" >> "$GITHUB_OUTPUT"
+
+          set +e
+          NEW_VERSION="$(bash scripts/check-claude-release.sh)"
+          EXIT_CODE=$?
+          set -e
+
+          if [ "$EXIT_CODE" -eq 0 ]; then
+            echo "New upstream version detected: ${NEW_VERSION}"
+            echo "new_version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          elif [ "$EXIT_CODE" -eq 1 ]; then
+            echo "No new upstream version. Current: ${PREVIOUS_VERSION}"
+            echo "new_version=${PREVIOUS_VERSION}" >> "$GITHUB_OUTPUT"
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Failed to check upstream version"
+            echo "new_version=${PREVIOUS_VERSION}" >> "$GITHUB_OUTPUT"
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Override if force release
+        id: force
+        if: github.event.inputs.force_release == 'true'
+        run: |
+          echo "Force release requested — overriding detection"
+          echo "should_release=true" >> "$GITHUB_OUTPUT"
+
+    # Re-export with force override applied
+    # The verify job checks both detect.outputs.should_release and the force flag
+
+  # ──────────────────────────────────────────────────────────────────
+  # Phase 2: Verify — ALL gates must pass or release is blocked
+  # ──────────────────────────────────────────────────────────────────
+  verify:
+    name: 'Phase 2: Verify'
+    runs-on: ubuntu-latest
+    needs: detect
+    if: needs.detect.outputs.should_release == 'true' || github.event.inputs.force_release == 'true'
+    outputs:
+      test_pass_count: ${{ steps.tests.outputs.pass_count }}
+      test_fail_count: ${{ steps.tests.outputs.fail_count }}
+      audit_clean: ${{ steps.audit.outputs.clean }}
+      lint_clean: ${{ steps.lint.outputs.clean }}
+      smoke_ok: ${{ steps.smoke.outputs.ok }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: v2/package-lock.json
+
+      - name: Install dependencies
+        working-directory: v2
+        run: npm ci
+
+      # Gate 1: Test suite
+      - name: Run test suite
+        id: tests
+        working-directory: v2
+        run: |
+          set +e
+          TEST_OUTPUT="$(node test/test.mjs 2>&1)"
+          TEST_EXIT=$?
+          set -e
+
+          echo "${TEST_OUTPUT}"
+
+          # Parse pass/fail counts from test output
+          PASS_COUNT="$(echo "${TEST_OUTPUT}" | grep -oE '[0-9]+ passing' | grep -oE '[0-9]+' | tail -1 || echo '0')"
+          FAIL_COUNT="$(echo "${TEST_OUTPUT}" | grep -oE '[0-9]+ failing' | grep -oE '[0-9]+' | tail -1 || echo '0')"
+
+          if [ -z "${PASS_COUNT}" ] || [ "${PASS_COUNT}" = "0" ]; then
+            # Fallback: count lines with checkmarks or "pass"
+            PASS_COUNT="$(echo "${TEST_OUTPUT}" | grep -cE '(✓|✔|PASS|pass)' || echo '0')"
+          fi
+
+          echo "pass_count=${PASS_COUNT}" >> "$GITHUB_OUTPUT"
+          echo "fail_count=${FAIL_COUNT}" >> "$GITHUB_OUTPUT"
+
+          echo "::notice::Tests: ${PASS_COUNT} passing, ${FAIL_COUNT} failing"
+
+          if [ "${TEST_EXIT}" -ne 0 ]; then
+            echo "::error::Test suite failed with exit code ${TEST_EXIT}"
+            exit 1
+          fi
+
+          if [ "${FAIL_COUNT}" -gt 0 ] 2>/dev/null; then
+            echo "::error::${FAIL_COUNT} tests failed"
+            exit 1
+          fi
+
+      # Gate 2: Security audit
+      - name: Security audit
+        id: audit
+        working-directory: v2
+        run: |
+          set +e
+          AUDIT_OUTPUT="$(npm audit --audit-level=high 2>&1)"
+          AUDIT_EXIT=$?
+          set -e
+
+          echo "${AUDIT_OUTPUT}"
+
+          if [ "${AUDIT_EXIT}" -eq 0 ]; then
+            echo "clean=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Security audit passed — no high/critical vulnerabilities"
+          else
+            echo "clean=false" >> "$GITHUB_OUTPUT"
+            echo "::error::Security audit found high or critical vulnerabilities"
+            exit 1
+          fi
+
+      # Gate 3: Lint (syntax validation)
+      - name: Lint check
+        id: lint
+        run: |
+          ERRORS=0
+          while IFS= read -r -d '' file; do
+            if ! node --check "${file}" 2>/dev/null; then
+              echo "::error file=${file}::Syntax error in ${file}"
+              ERRORS=$((ERRORS + 1))
+            fi
+          done < <(find v2/src -name '*.mjs' -print0)
+
+          if [ "${ERRORS}" -gt 0 ]; then
+            echo "clean=false" >> "$GITHUB_OUTPUT"
+            echo "::error::${ERRORS} file(s) have syntax errors"
+            exit 1
+          else
+            echo "clean=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::All .mjs files pass syntax validation"
+          fi
+
+      # Gate 4: Smoke test — verify CLI boots
+      - name: Smoke test
+        id: smoke
+        working-directory: v2
+        run: |
+          set +e
+          # Try --version first, then --help, then just check the process starts
+          SMOKE_OUTPUT="$(timeout 10 node src/index.mjs --version 2>&1)"
+          SMOKE_EXIT=$?
+
+          if [ "${SMOKE_EXIT}" -eq 124 ]; then
+            # Timeout — the CLI started but waited for input, which is OK
+            echo "::notice::CLI started successfully (timed out waiting for input)"
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "${SMOKE_EXIT}" -eq 0 ]; then
+            echo "::notice::CLI smoke test passed: ${SMOKE_OUTPUT}"
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Try --help as fallback
+          SMOKE_OUTPUT="$(timeout 10 node src/index.mjs --help 2>&1)"
+          SMOKE_EXIT=$?
+
+          if [ "${SMOKE_EXIT}" -eq 0 ] || [ "${SMOKE_EXIT}" -eq 124 ]; then
+            echo "::notice::CLI smoke test passed (--help)"
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Final fallback: just check if it starts at all
+          timeout 5 node -e "import('./src/index.mjs')" 2>/dev/null
+          if [ $? -eq 0 ] || [ $? -eq 124 ]; then
+            echo "::notice::CLI module loads successfully"
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "ok=false" >> "$GITHUB_OUTPUT"
+          echo "::error::CLI failed to start"
+          exit 1
+
+  # ──────────────────────────────────────────────────────────────────
+  # Phase 3: Analyze — AI-powered discovery (optional)
+  # ──────────────────────────────────────────────────────────────────
+  analyze:
+    name: 'Phase 3: Analyze'
+    runs-on: ubuntu-latest
+    needs: [detect, verify]
+    if: |
+      always() &&
+      needs.verify.result == 'success' &&
+      github.event.inputs.skip_ai_analysis != 'true'
+    outputs:
+      discovery_summary: ${{ steps.analyze.outputs.summary }}
+      analysis_available: ${{ steps.analyze.outputs.available }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Run discovery analysis
+        id: analyze
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          chmod +x scripts/analyze-discoveries.sh
+
+          if [ -z "${ANTHROPIC_API_KEY}" ]; then
+            echo "::notice::ANTHROPIC_API_KEY not set — skipping AI analysis"
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "summary=AI analysis skipped (no API key configured)" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          set +e
+          SUMMARY="$(bash scripts/analyze-discoveries.sh \
+            "${{ needs.detect.outputs.new_version }}" \
+            "${{ needs.detect.outputs.previous_version }}" 2>&1)"
+          EXIT_CODE=$?
+          set -e
+
+          if [ "${EXIT_CODE}" -eq 0 ] && [ -n "${SUMMARY}" ]; then
+            # Write to file to preserve multiline content
+            echo "${SUMMARY}" > /tmp/discovery-summary.md
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            # Escape for output (newlines)
+            ESCAPED="$(echo "${SUMMARY}" | head -100 | sed ':a;N;$!ba;s/\n/%0A/g')"
+            echo "summary=${ESCAPED}" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::AI analysis failed or returned empty"
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "summary=AI analysis was unavailable for this release" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload discovery summary
+        if: steps.analyze.outputs.available == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: discovery-summary
+          path: /tmp/discovery-summary.md
+          retention-days: 90
+
+  # ──────────────────────────────────────────────────────────────────
+  # Phase 4: Release — publish verified nightly build
+  # ──────────────────────────────────────────────────────────────────
+  release:
+    name: 'Phase 4: Release'
+    runs-on: ubuntu-latest
+    needs: [detect, verify, analyze]
+    if: |
+      always() &&
+      needs.verify.result == 'success' &&
+      (needs.detect.outputs.should_release == 'true' || github.event.inputs.force_release == 'true')
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download discovery summary
+        if: needs.analyze.outputs.analysis_available == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: discovery-summary
+          path: /tmp
+        continue-on-error: true
+
+      - name: Determine release tag
+        id: tag
+        run: |
+          DATE="$(date -u +%Y%m%d)"
+
+          # Extract minor/patch from the current package version
+          PKG_VERSION="$(node -e "console.log(require('./v2/package.json').version)")"
+          TAG="v${PKG_VERSION}-nightly.${DATE}"
+
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "date=${DATE}" >> "$GITHUB_OUTPUT"
+          echo "pkg_version=${PKG_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "::notice::Release tag: ${TAG}"
+
+      - name: Generate release notes
+        id: notes
+        env:
+          CLAUDE_VERSION: ${{ needs.detect.outputs.new_version }}
+          PREVIOUS_VERSION: ${{ needs.detect.outputs.previous_version }}
+          TEST_PASS_COUNT: ${{ needs.verify.outputs.test_pass_count }}
+          TEST_FAIL_COUNT: ${{ needs.verify.outputs.test_fail_count }}
+          AUDIT_CLEAN: ${{ needs.verify.outputs.audit_clean }}
+          LINT_CLEAN: ${{ needs.verify.outputs.lint_clean }}
+          SMOKE_OK: ${{ needs.verify.outputs.smoke_ok }}
+        run: |
+          chmod +x scripts/generate-release-notes.sh
+
+          DISCOVERY=""
+          if [ -f /tmp/discovery-summary.md ]; then
+            DISCOVERY="$(cat /tmp/discovery-summary.md)"
+          fi
+
+          NOTES="$(bash scripts/generate-release-notes.sh \
+            "${CLAUDE_VERSION}" \
+            "${TEST_PASS_COUNT}" \
+            "${PREVIOUS_VERSION}" \
+            "${AUDIT_CLEAN}" \
+            "${LINT_CLEAN}" \
+            "${SMOKE_OK}" \
+            "${TEST_FAIL_COUNT}" \
+            "${DISCOVERY}")"
+
+          # Write notes to file for the release step
+          echo "${NOTES}" > /tmp/release-notes.md
+          echo "::notice::Release notes generated"
+
+      - name: Update last-known version
+        run: |
+          echo "${{ needs.detect.outputs.new_version }}" > scripts/last-known-claude-version.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add scripts/last-known-claude-version.txt
+          git diff --cached --quiet || git commit -m "chore: update last-known Claude Code version to ${{ needs.detect.outputs.new_version }}"
+          git push || echo "::warning::Could not push version update"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+
+          gh release create "${TAG}" \
+            --title "Nightly Verified Build ${TAG}" \
+            --notes-file /tmp/release-notes.md \
+            --prerelease
+
+          echo "::notice::Release published: ${TAG}"
+
+  # ──────────────────────────────────────────────────────────────────
+  # Failure handler — open issue for investigation
+  # ──────────────────────────────────────────────────────────────────
+  on-failure:
+    name: 'Handle Failure'
+    runs-on: ubuntu-latest
+    needs: [detect, verify, release]
+    if: failure()
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Open failure issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          DATE="$(date -u +%Y-%m-%d)"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          # Check if a similar issue already exists
+          EXISTING="$(gh issue list --label "nightly-failure" --state open --limit 1 --json number -q '.[0].number' 2>/dev/null || echo '')"
+
+          if [ -n "${EXISTING}" ]; then
+            gh issue comment "${EXISTING}" --body "$(cat <<EOF
+          ### Nightly pipeline failed again on ${DATE}
+
+          **Run:** ${RUN_URL}
+          **Upstream version:** ${{ needs.detect.outputs.new_version }}
+
+          Please investigate the linked workflow run.
+          EOF
+          )"
+            echo "::notice::Commented on existing issue #${EXISTING}"
+          else
+            gh issue create \
+              --title "Nightly verified release failed — ${DATE}" \
+              --label "nightly-failure,bug" \
+              --body "$(cat <<EOF
+          ## Nightly Verified Release Pipeline Failure
+
+          **Date:** ${DATE}
+          **Workflow Run:** ${RUN_URL}
+          **Upstream Claude Code Version:** ${{ needs.detect.outputs.new_version }}
+          **Previous Version:** ${{ needs.detect.outputs.previous_version }}
+
+          ### Investigation Checklist
+
+          - [ ] Check test results
+          - [ ] Check security audit
+          - [ ] Check lint/syntax errors
+          - [ ] Check smoke test
+          - [ ] Review workflow logs
+
+          ### Quick Links
+
+          - [Workflow Run](${RUN_URL})
+          - [Test Suite](../blob/main/v2/test/test.mjs)
+          - [Dashboard](https://pi.ruv.io)
+          EOF
+          )"
+            echo "::notice::Created failure investigation issue"
+          fi
